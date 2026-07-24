@@ -1,17 +1,35 @@
 # Aplicativo de estado estimado de tuberías por órdenes de servicio
 
-Versión: **v1.2.1**
+Versión: **v1.2.2**
 
 Aplicación en Python + Streamlit para estimar el estado de tuberías a partir de:
 
 - Catastro de redes de tubería en JSON, GeoJSON, SHP ZIP, KML o KMZ.
 - Órdenes de servicio/intervenciones en CSV o Excel.
 
-La versión v1.2.1 simplifica el aplicativo para concentrarse en dos salidas principales:
+La línea v1.2.x mantiene el mapa interactivo original con mapa de calor, puntos de órdenes y segmentos de tubería con popup. La versión v1.2.2 agrega una herramienta complementaria para planificación de detección de fugas satelital.
+
+## Salidas principales
 
 1. **Mapa interactivo** con mapa de calor, puntos de órdenes y segmentos de tubería asociados.
 2. **Tabla resumen por sistema de abastecimiento**, con longitud estimada por estado y material.
 3. **Exportación a Excel**, con una pestaña por sistema cuando se analiza más de un sistema.
+4. **Cuadro satelital 20 km x 20 km**, con cálculo de kilómetros de tubería dentro del cuadro usando únicamente el catastro de tuberías.
+
+## Herramienta de cuadro satelital 20 km x 20 km
+
+En la pestaña **Mapa**, dentro del panel **Herramienta de cuadro satelital 20 km x 20 km**, se puede:
+
+- Activar un cuadrado transparente de **20 km x 20 km**.
+- Calcular los kilómetros de tubería dentro del cuadro usando únicamente la capa de tuberías/catastro cargada.
+- Mover el cuadro por pasos hacia norte, sur, este u oeste.
+- Ajustar manualmente el centro en coordenadas métricas.
+- Usar el último clic del mapa como centro del cuadro.
+- Guardar la ubicación definida dentro de la sesión actual.
+- Exportar los resultados para el contratista en **Excel**.
+- Exportar el cuadro y las tuberías dentro del cuadro como **Shapefile ZIP**.
+
+La etiqueta visible del cuadro muestra el tamaño de la escena y la longitud total de tubería dentro del área. Este cálculo no utiliza las órdenes de servicio ni altera el análisis de estado de tuberías.
 
 ## Ejecución rápida en Windows
 
