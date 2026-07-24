@@ -8,7 +8,7 @@ from typing import Iterable, Optional
 
 import pandas as pd
 
-APP_VERSION = "v1.3.0"
+APP_VERSION = "v1.3.2"
 CRS_WGS84 = "EPSG:4326"
 CRS_CRTM05 = "EPSG:5367"
 
@@ -38,49 +38,40 @@ def safe_numeric(series: pd.Series) -> pd.Series:
         series.astype(str)
         .str.replace(" ", "", regex=False)
         .str.replace(",", ".", regex=False)
-        .replace({"<Null>": None, "nan": None, "None": None, "": None}),
+        .replace({"nan": None, "None": None, "<Null>": None, "": None}),
         errors="coerce",
     )
 
 
-def parse_dates(series: pd.Series, dayfirst: bool = True) -> pd.Series:
-    """Parse date strings robustly."""
-    cleaned = series.replace({"<Null>": None, "nan": None, "None": None, "": None})
-    return pd.to_datetime(cleaned, errors="coerce", dayfirst=dayfirst)
-
-
-def pick_default(columns: Iterable[str], candidates: Iterable[str], fallback: Optional[str] = None) -> Optional[str]:
-    """Return the best matching column name from candidates."""
+def pick_default(columns: Iterable[str], candidates: Iterable[str]) -> Optional[str]:
     cols = list(columns)
-    norm_to_col = {normalize_text(c): c for c in cols}
-    for candidate in candidates:
-        norm = normalize_text(candidate)
-        if norm in norm_to_col:
-            return norm_to_col[norm]
-    for candidate in candidates:
-        norm = normalize_text(candidate)
-        for col_norm, col in norm_to_col.items():
-            if norm and norm in col_norm:
+    norm_map = {normalize_text(c): c for c in cols}
+    for cand in candidates:
+        if normalize_text(cand) in norm_map:
+            return norm_map[normalize_text(cand)]
+    for cand in candidates:
+        nc = normalize_text(cand)
+        for col in cols:
+            if nc and nc in normalize_text(col):
                 return col
-    return fallback if fallback in cols else (cols[0] if cols else None)
+    return None
 
 
-def dataframe_to_excel_bytes(sheets: dict[str, pd.DataFrame]) -> bytes:
-    """Build an Excel workbook in memory from several dataframes."""
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        for sheet, df in sheets.items():
-            clean_sheet = re.sub(r"[^A-Za-z0-9 _-]", "", sheet)[:31] or "Hoja"
-            df.to_excel(writer, sheet_name=clean_sheet, index=False)
-    return buffer.getvalue()
-
-
-def now_label() -> str:
-    return datetime.now().strftime("%Y%m%d_%H%M%S")
-
-
-def format_number(value: float, decimals: int = 2) -> str:
+def format_number(value: float, decimals: int = 0) -> str:
     try:
         return f"{float(value):,.{decimals}f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except Exception:
-        return ""
+        return "0"
+
+
+def dataframe_to_excel_bytes(sheets: dict[str, pd.DataFrame]) -> bytes:
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        for name, df in sheets.items():
+            safe_name = str(name)[:31].replace("/", "-").replace("\\", "-").replace("*", "-").replace("?", "-").replace("[", "(").replace("]", ")")
+            df.to_excel(writer, sheet_name=safe_name, index=False)
+    return output.getvalue()
+
+
+def today_label() -> str:
+    return datetime.now().strftime("%d/%m/%Y")
