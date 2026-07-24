@@ -19,6 +19,51 @@ SQUARE_SIZE_M = 20_000.0
 HALF_SIZE_M = SQUARE_SIZE_M / 2.0
 
 
+def _patch_streamlit_satellite_state() -> None:
+    """Allow map-click callbacks to update satellite-square widget keys safely.
+
+    Streamlit does not allow direct assignment to a session_state key after a
+    widget with the same key has already been instantiated in the same run. The
+    map click is captured after the controls are drawn, so updating sat_x/sat_y
+    from that click can raise StreamlitAPIException. For these three internal
+    satellite keys only, this patch writes directly to Streamlit's new-session
+    state when the public setter refuses the update. It leaves all other keys
+    untouched.
+    """
+    try:
+        import streamlit as st  # noqa: F401
+        from streamlit.errors import StreamlitAPIException
+        from streamlit.runtime.state.session_state_proxy import SessionStateProxy, get_session_state
+    except Exception:
+        return
+
+    if getattr(SessionStateProxy, "_aya_satellite_patch", False):
+        return
+
+    original_setitem = SessionStateProxy.__setitem__
+    protected_keys = {"sat_x", "sat_y", "sat_enabled"}
+
+    def patched_setitem(self, key, value):  # type: ignore[no-untyped-def]
+        try:
+            return original_setitem(self, key, value)
+        except StreamlitAPIException:
+            if key not in protected_keys:
+                raise
+            state = get_session_state()
+            try:
+                raw_state = state._state  # SafeSessionState -> SessionState
+                raw_state._new_session_state[key] = value
+                return None
+            except Exception:
+                raise
+
+    SessionStateProxy.__setitem__ = patched_setitem
+    SessionStateProxy._aya_satellite_patch = True
+
+
+_patch_streamlit_satellite_state()
+
+
 def wgs84_point_to_metric(lon: float, lat: float, metric_crs: str = CRS_CRTM05) -> tuple[float, float]:
     """Convert a lon/lat point to the selected metric CRS."""
     pt = gpd.GeoDataFrame([{"id": 1}], geometry=[Point(float(lon), float(lat))], crs="EPSG:4326").to_crs(metric_crs)
@@ -68,6 +113,14 @@ def _value_series(df: gpd.GeoDataFrame, col: Optional[str], default: str) -> pd.
     return pd.Series([default] * len(df), index=df.index)
 
 
+def _empty_clipped(metric_crs: str) -> gpd.GeoDataFrame:
+    return gpd.GeoDataFrame(
+        columns=["tramo_id", "sistema", "material", "diametro", "funcion", "long_m", "long_km", "geometry"],
+        geometry="geometry",
+        crs=metric_crs,
+    )
+
+
 def clip_pipes_to_square(
     pipes_raw: gpd.GeoDataFrame,
     square_metric: gpd.GeoDataFrame,
@@ -87,10 +140,9 @@ def clip_pipes_to_square(
     pipes_metric = to_metric(pipes_raw, metric_crs).explode(index_parts=False).reset_index(drop=True)
 
     if pipes_metric.empty:
-        empty = gpd.GeoDataFrame(columns=["tramo_id", "sistema", "material", "diametro", "funcion", "long_m", "long_km", "geometry"], geometry="geometry", crs=metric_crs)
+        empty = _empty_clipped(metric_crs)
         return empty, {"total_km": 0.0, "total_m": 0.0, "tramos": 0, "area_km2": 400.0}
 
-    # Spatial-index prefilter to avoid intersecting every geometry.
     try:
         idx = list(pipes_metric.sindex.intersection(square_geom.bounds))
         candidates = pipes_metric.iloc[idx].copy() if idx else pipes_metric.iloc[0:0].copy()
@@ -98,13 +150,12 @@ def clip_pipes_to_square(
         candidates = pipes_metric.copy()
 
     if candidates.empty:
-        empty = gpd.GeoDataFrame(columns=["tramo_id", "sistema", "material", "diametro", "funcion", "long_m", "long_km", "geometry"], geometry="geometry", crs=metric_crs)
+        empty = _empty_clipped(metric_crs)
         return empty, {"total_km": 0.0, "total_m": 0.0, "tramos": 0, "area_km2": 400.0}
 
-    mask = candidates.geometry.intersects(square_geom)
-    candidates = candidates[mask].copy()
+    candidates = candidates[candidates.geometry.intersects(square_geom)].copy()
     if candidates.empty:
-        empty = gpd.GeoDataFrame(columns=["tramo_id", "sistema", "material", "diametro", "funcion", "long_m", "long_km", "geometry"], geometry="geometry", crs=metric_crs)
+        empty = _empty_clipped(metric_crs)
         return empty, {"total_km": 0.0, "total_m": 0.0, "tramos": 0, "area_km2": 400.0}
 
     clipped_geom = candidates.geometry.intersection(square_geom)
@@ -113,7 +164,7 @@ def clip_pipes_to_square(
     clipped_geom = clipped_geom[keep]
 
     if candidates.empty:
-        empty = gpd.GeoDataFrame(columns=["tramo_id", "sistema", "material", "diametro", "funcion", "long_m", "long_km", "geometry"], geometry="geometry", crs=metric_crs)
+        empty = _empty_clipped(metric_crs)
         return empty, {"total_km": 0.0, "total_m": 0.0, "tramos": 0, "area_km2": 400.0}
 
     tramo_id = _value_series(candidates, id_col, "Sin ID") if id_col else pd.Series([f"TRAMO_{i+1}" for i in range(len(candidates))], index=candidates.index)
