@@ -4,13 +4,13 @@ from typing import Optional
 
 import folium
 import geopandas as gpd
-from folium.plugins import HeatMap, MarkerCluster
+from folium.plugins import FastMarkerCluster, HeatMap
 
 from .utils import SEVERITY_COLORS
 
 BASEMAPS = {
-    "OpenStreetMap": "OpenStreetMap",
     "CartoDB Positron": "CartoDB positron",
+    "OpenStreetMap": "OpenStreetMap",
     "CartoDB DarkMatter": "CartoDB dark_matter",
     "Esri Satelital": {
         "tiles": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
@@ -21,6 +21,25 @@ BASEMAPS = {
         "attr": "Esri World Topographic Map",
     },
 }
+
+# Columnas necesarias para el popup. El cálculo conserva todos los campos en memoria;
+# el mapa recibe sólo esta versión liviana para acelerar el navegador.
+SEGMENT_POPUP_FIELDS = [
+    "segmento_id",
+    "tramo_id",
+    "CODSISTEMA",
+    "CODMATERIA",
+    "Funcion",
+    "Diametro",
+    "longitud_segmento_m",
+    "cantidad_intervenciones",
+    "indicador_100m",
+    "clasificacion",
+    "estado_estimado",
+    "metodo_asociacion_dominante",
+]
+
+TOOLTIP_FIELDS = ["clasificacion", "estado_estimado", "cantidad_intervenciones", "indicador_100m"]
 
 
 def _center_from_layers(*layers: gpd.GeoDataFrame) -> list[float]:
@@ -41,26 +60,47 @@ def _style_function(feature):
     }
 
 
-def _overlay_style(feature):
+def _overlay_style(_feature):
     return {
         "color": "#002B5C",
-        "weight": 3,
-        "opacity": 0.85,
+        "weight": 2,
+        "opacity": 0.75,
         "fillColor": "#C9A227",
-        "fillOpacity": 0.18,
+        "fillOpacity": 0.12,
     }
 
 
-def _popup_fields(gdf: gpd.GeoDataFrame, max_fields: int = 8) -> list[str]:
+def _popup_fields(gdf: gpd.GeoDataFrame, max_fields: int = 6) -> list[str]:
     candidates = []
+    sample = gdf.head(min(len(gdf), 250))
     for col in gdf.columns:
         if col == "geometry":
             continue
-        if gdf[col].astype(str).str.len().mean() <= 120:
+        try:
+            mean_len = sample[col].astype(str).str.len().mean()
+        except Exception:
+            mean_len = 999
+        if mean_len <= 80:
             candidates.append(col)
         if len(candidates) >= max_fields:
             break
     return candidates
+
+
+def _compact_segment_layer(gdf: gpd.GeoDataFrame, line_weight: int, line_opacity: float) -> gpd.GeoDataFrame:
+    if gdf is None or gdf.empty:
+        return gdf
+    keep = [c for c in SEGMENT_POPUP_FIELDS if c in gdf.columns]
+    keep = list(dict.fromkeys(keep + ["geometry"]))
+    out = gdf[keep].copy()
+    out["map_weight"] = line_weight
+    out["map_opacity"] = line_opacity
+    for col in ["longitud_segmento_m", "indicador_100m"]:
+        if col in out.columns:
+            out[col] = out[col].round(2)
+    if "cantidad_intervenciones" in out.columns:
+        out["cantidad_intervenciones"] = out["cantidad_intervenciones"].fillna(0).astype(int)
+    return out
 
 
 def _add_overlay_layer(m: folium.Map, gdf: gpd.GeoDataFrame, name: str, max_features: int) -> None:
@@ -70,125 +110,85 @@ def _add_overlay_layer(m: folium.Map, gdf: gpd.GeoDataFrame, name: str, max_feat
     if len(layer) > max_features:
         layer = layer.head(max_features).copy()
 
-    geom_types = set(layer.geometry.geom_type.dropna().unique())
     popup_fields = _popup_fields(layer)
-
-    if geom_types.issubset({"Point", "MultiPoint"}):
-        cluster = MarkerCluster(name=name).add_to(m)
-        for _, row in layer.iterrows():
-            geom = row.geometry
-            if geom is None or geom.is_empty:
-                continue
-            points = list(geom.geoms) if geom.geom_type == "MultiPoint" else [geom]
-            popup_txt = "<br>".join([f"<b>{c}</b>: {row.get(c, '')}" for c in popup_fields]) or name
-            for pt in points:
-                folium.CircleMarker(
-                    location=[pt.y, pt.x],
-                    radius=5,
-                    weight=1,
-                    color="#002B5C",
-                    fill=True,
-                    fill_color="#C9A227",
-                    fill_opacity=0.8,
-                    popup=folium.Popup(popup_txt, max_width=450),
-                ).add_to(cluster)
-    else:
-        folium.GeoJson(
-            layer.to_json(),
-            name=name,
-            style_function=_overlay_style,
-            tooltip=folium.features.GeoJsonTooltip(fields=popup_fields, aliases=popup_fields, localize=True) if popup_fields else None,
-            popup=folium.features.GeoJsonPopup(fields=popup_fields, aliases=popup_fields, localize=True, max_width=450) if popup_fields else None,
-        ).add_to(m)
+    folium.GeoJson(
+        layer.to_json(drop_id=True),
+        name=name,
+        style_function=_overlay_style,
+        tooltip=folium.features.GeoJsonTooltip(fields=popup_fields, aliases=popup_fields, localize=True) if popup_fields else None,
+        popup=folium.features.GeoJsonPopup(fields=popup_fields, aliases=popup_fields, localize=True, max_width=380) if popup_fields else None,
+        smooth_factor=2.0,
+    ).add_to(m)
 
 
 def build_map(
     results_wgs84: gpd.GeoDataFrame,
     points_wgs84: Optional[gpd.GeoDataFrame] = None,
-    basemap: str = "OpenStreetMap",
-    show_points: bool = True,
+    basemap: str = "CartoDB Positron",
+    show_points: bool = False,
     show_heatmap: bool = True,
     heat_radius: int = 14,
     line_weight: int = 4,
     line_opacity: float = 0.85,
-    max_features_map: int = 5000,
+    max_features_map: int = 2500,
     overlay_layers: Optional[list[tuple[str, gpd.GeoDataFrame]]] = None,
 ) -> folium.Map:
-    """Build interactive map with classified pipe segments, interventions and optional overlays."""
+    """Build a lightweight interactive map.
+
+    The technical analysis still uses the complete GeoDataFrames. This function
+    intentionally sends a compact display layer to the browser so Streamlit Cloud
+    does not spend most of the time rendering thousands of geometries/markers.
+    """
     layer_candidates = [results_wgs84, points_wgs84]
     if overlay_layers:
         layer_candidates.extend([gdf for _, gdf in overlay_layers])
     center = _center_from_layers(*layer_candidates)
-    tile = BASEMAPS.get(basemap, "OpenStreetMap")
+    tile = BASEMAPS.get(basemap, "CartoDB positron")
     if isinstance(tile, dict):
-        m = folium.Map(location=center, zoom_start=14, tiles=tile["tiles"], attr=tile["attr"], control_scale=True)
+        m = folium.Map(location=center, zoom_start=14, tiles=tile["tiles"], attr=tile["attr"], control_scale=True, prefer_canvas=True)
     else:
-        m = folium.Map(location=center, zoom_start=14, tiles=tile, control_scale=True)
+        m = folium.Map(location=center, zoom_start=14, tiles=tile, control_scale=True, prefer_canvas=True)
 
+    # Mantener opciones de mapa base sin cargar demasiadas capas por defecto.
     folium.TileLayer("OpenStreetMap", name="OpenStreetMap", show=False).add_to(m)
     folium.TileLayer("CartoDB positron", name="CartoDB Positron", show=False).add_to(m)
 
     if overlay_layers:
         for name, gdf in overlay_layers:
-            _add_overlay_layer(m, gdf, name=name, max_features=max_features_map)
+            _add_overlay_layer(m, gdf, name=name, max_features=min(max_features_map, 1500))
 
     res = results_wgs84.copy()
-    res["map_weight"] = line_weight
-    res["map_opacity"] = line_opacity
     if len(res) > max_features_map:
         sort_cols = [c for c in ["orden_gravedad", "indicador_100m", "cantidad_intervenciones"] if c in res.columns]
         res = res.sort_values(sort_cols, ascending=False).head(max_features_map) if sort_cols else res.head(max_features_map)
 
-    popup_fields = [
-        c
-        for c in [
-            "segmento_id",
-            "tramo_id",
-            "CODSISTEMA",
-            "CODMATERIA",
-            "Funcion",
-            "Diametro",
-            "longitud_segmento_m",
-            "cantidad_intervenciones",
-            "indicador_100m",
-            "clasificacion",
-            "estado_estimado",
-            "metodo_asociacion_dominante",
-        ]
-        if c in res.columns
-    ]
-    tooltip_fields = [c for c in ["clasificacion", "estado_estimado", "cantidad_intervenciones", "indicador_100m"] if c in res.columns]
+    res = _compact_segment_layer(res, line_weight=line_weight, line_opacity=line_opacity)
+    popup_fields = [c for c in SEGMENT_POPUP_FIELDS if c in res.columns]
+    tooltip_fields = [c for c in TOOLTIP_FIELDS if c in res.columns]
+
     folium.GeoJson(
-        res.to_json(),
-        name="Segmentos clasificados",
+        res.to_json(drop_id=True),
+        name="Segmentos clasificados visibles",
         style_function=_style_function,
         tooltip=folium.features.GeoJsonTooltip(fields=tooltip_fields, aliases=tooltip_fields, localize=True) if tooltip_fields else None,
-        popup=folium.features.GeoJsonPopup(fields=popup_fields, aliases=popup_fields, localize=True, max_width=500) if popup_fields else None,
+        popup=folium.features.GeoJsonPopup(fields=popup_fields, aliases=popup_fields, localize=True, max_width=420) if popup_fields else None,
+        smooth_factor=2.0,
     ).add_to(m)
 
     if points_wgs84 is not None and not points_wgs84.empty:
         pts = points_wgs84.copy()
-        if len(pts) > max_features_map:
-            pts = pts.sample(max_features_map, random_state=42)
         if show_heatmap:
-            coords = [[geom.y, geom.x] for geom in pts.geometry if geom is not None and not geom.is_empty]
+            heat_limit = min(len(pts), max(2500, max_features_map))
+            heat_pts = pts.sample(heat_limit, random_state=42) if len(pts) > heat_limit else pts
+            coords = [[geom.y, geom.x] for geom in heat_pts.geometry if geom is not None and not geom.is_empty]
             if coords:
                 HeatMap(coords, radius=heat_radius, blur=max(10, heat_radius), name="Mapa de calor").add_to(m)
         if show_points:
-            cluster = MarkerCluster(name="Puntos de intervención").add_to(m)
-            for _, row in pts.iterrows():
-                geom = row.geometry
-                if geom is None or geom.is_empty:
-                    continue
-                label = str(row.get("Nombre_Ord", row.get("Tipo_Orden", "Intervención")))[:120]
-                folium.CircleMarker(
-                    location=[geom.y, geom.x],
-                    radius=3,
-                    weight=1,
-                    fill=True,
-                    fill_opacity=0.65,
-                    popup=label,
-                ).add_to(cluster)
+            point_limit = min(len(pts), 1200)
+            pts_vis = pts.sample(point_limit, random_state=42) if len(pts) > point_limit else pts
+            coords = [[geom.y, geom.x] for geom in pts_vis.geometry if geom is not None and not geom.is_empty]
+            if coords:
+                FastMarkerCluster(coords, name=f"Puntos asociados visibles ({len(coords):,})".replace(",", ".")).add_to(m)
 
     legend_html = """
     <div style="position: fixed; bottom: 30px; left: 30px; z-index: 9999; background: white; padding: 10px; border: 1px solid #999; border-radius: 4px; font-size: 13px;">
@@ -198,9 +198,10 @@ def build_map(
       <span style="color:#d7191c;">■</span> Rojo<br>
       <span style="color:#808080;">■</span> Sin datos<br>
       <hr style="margin:6px 0;">
-      <span style="color:#002B5C;">■</span> Capas adicionales
+      <span style="color:#002B5C;">■</span> Capas adicionales<br>
+      <small>Mapa optimizado: muestra una capa visual resumida; la tabla y Excel usan el cálculo completo.</small>
     </div>
     """
     m.get_root().html.add_child(folium.Element(legend_html))
-    folium.LayerControl(collapsed=False).add_to(m)
+    folium.LayerControl(collapsed=True).add_to(m)
     return m
