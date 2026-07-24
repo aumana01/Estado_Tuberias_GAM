@@ -20,6 +20,7 @@ from modules.analysis import (
     DEFAULT_MATERIAL_STATE_PERCENT,
     associate_points_to_segments,
     build_condition_tables,
+    calculate_results,
     summarize_assignment,
 )
 from modules.data_loader import (
@@ -30,12 +31,22 @@ from modules.data_loader import (
     suggest_point_columns,
     validate_line_layer,
 )
+from modules.excel_export import build_excel_report
 from modules.geoprocessing import available_filter_values, prepare_lines, to_metric, to_wgs84
 from modules.mapping import BASEMAPS, build_map
-from modules.excel_export import build_excel_report
+from modules.satellite_grid import (
+    add_square_to_map,
+    build_satellite_excel,
+    build_satellite_shp_zip,
+    clip_pipes_to_square,
+    create_square_20km,
+    default_center_from_layer,
+    metric_point_to_wgs84,
+    summarize_clipped_pipes,
+    wgs84_point_to_metric,
+)
 from modules.segmentation import segment_lines
 from modules.utils import APP_VERSION, CRS_CRTM05, CRS_WGS84, format_number, pick_default
-from modules.analysis import calculate_results
 
 DEFAULT_PIPES = ROOT / "data" / "JSON_catastro.json"
 DEFAULT_ORDERS = ROOT / "data" / "Ordenes de Servicio GAM.csv"
@@ -109,6 +120,25 @@ def display_percent_table(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def move_satellite_square(dx: float, dy: float) -> None:
+    st.session_state["sat_x"] = float(st.session_state.get("sat_x", 0.0)) + float(dx)
+    st.session_state["sat_y"] = float(st.session_state.get("sat_y", 0.0)) + float(dy)
+    st.session_state["sat_enabled"] = True
+
+
+def clear_satellite_square() -> None:
+    st.session_state["sat_enabled"] = False
+
+
+def use_last_click_as_square_center(metric_crs: str) -> None:
+    click = st.session_state.get("sat_last_click")
+    if click:
+        x, y = wgs84_point_to_metric(click.get("lng"), click.get("lat"), metric_crs)
+        st.session_state["sat_x"] = x
+        st.session_state["sat_y"] = y
+        st.session_state["sat_enabled"] = True
+
+
 local_css()
 st.markdown("<h1 class='aya-title'>Estado estimado de tuberías por órdenes de servicio</h1>", unsafe_allow_html=True)
 st.caption(f"Versión {APP_VERSION} · Salidas principales: mapa de calor + tabla resumen por sistema")
@@ -121,8 +151,10 @@ with st.expander("Criterio del aplicativo", expanded=False):
         luego tuberías del **mismo diámetro** y finalmente, si no hay coincidencia, asigna la orden a la **tubería más cercana**
         dentro del radio configurado.
 
-        Las salidas se reducen a dos elementos: un mapa interactivo con mapa de calor, puntos y segmentos asociados;
-        y una tabla por sistema de abastecimiento con la longitud estimada en estado **Malo**, **Regular** y **Bueno** por material.
+        Las salidas principales son el mapa interactivo con mapa de calor, puntos y segmentos asociados; y una tabla
+        por sistema de abastecimiento con la longitud estimada en estado **Malo**, **Regular** y **Bueno** por material.
+        La versión v1.2.2 agrega una herramienta de cuadro satelital de **20 km x 20 km** para estimar la longitud de
+        tubería dentro de una escena de detección de fugas satelital.
         """
     )
 
@@ -334,6 +366,7 @@ if run:
             "diameter_col": diameter_col,
             "function_col": function_col,
             "point_system_col": point_system_col,
+            "id_col": id_col,
         }
         st.session_state["params"] = {
             "version": APP_VERSION,
@@ -368,6 +401,7 @@ system_col = field_config.get("system_col")
 material_col = field_config.get("material_col")
 diameter_col = field_config.get("diameter_col")
 function_col = field_config.get("function_col")
+id_col = field_config.get("id_col")
 
 st.divider()
 st.subheader("Salidas principales")
@@ -426,6 +460,121 @@ with map_tab:
         if overlay_layers:
             st.caption(f"Capas adicionales cargadas: {len(overlay_layers)}")
 
+    # ----------------------------- Satellite 20x20 km square -----------------------------
+    square_metric = None
+    clipped_sat = None
+    sat_summary = None
+
+    with st.expander("Herramienta de cuadro satelital 20 km x 20 km", expanded=False):
+        st.markdown(
+            """
+            Esta herramienta utiliza **únicamente el catastro de tuberías cargado en JSON/capa de tuberías**.
+            No utiliza las órdenes de servicio. El cuadro permite estimar cuántos kilómetros de tubería quedarían
+            dentro de una escena de detección de fugas satelital de **20 km x 20 km**.
+            """
+        )
+
+        if "sat_x" not in st.session_state or "sat_y" not in st.session_state:
+            try:
+                default_x, default_y = default_center_from_layer(pipes_raw, metric_crs)
+            except Exception:
+                default_x, default_y = 0.0, 0.0
+            st.session_state["sat_x"] = default_x
+            st.session_state["sat_y"] = default_y
+        if "sat_enabled" not in st.session_state:
+            st.session_state["sat_enabled"] = False
+        if "sat_saved_locations" not in st.session_state:
+            st.session_state["sat_saved_locations"] = []
+
+        st.checkbox("Mostrar cuadro satelital 20 km x 20 km", key="sat_enabled")
+
+        coord_cols = st.columns(3)
+        with coord_cols[0]:
+            st.number_input("Centro X / Este", key="sat_x", format="%.3f")
+        with coord_cols[1]:
+            st.number_input("Centro Y / Norte", key="sat_y", format="%.3f")
+        with coord_cols[2]:
+            move_step_km = st.number_input("Paso para mover (km)", min_value=0.5, max_value=20.0, value=1.0, step=0.5)
+
+        move_step_m = float(move_step_km) * 1000.0
+        move_cols = st.columns(6)
+        move_cols[0].button("← Oeste", on_click=move_satellite_square, args=(-move_step_m, 0.0))
+        move_cols[1].button("→ Este", on_click=move_satellite_square, args=(move_step_m, 0.0))
+        move_cols[2].button("↑ Norte", on_click=move_satellite_square, args=(0.0, move_step_m))
+        move_cols[3].button("↓ Sur", on_click=move_satellite_square, args=(0.0, -move_step_m))
+        move_cols[4].button("Borrar cuadro", on_click=clear_satellite_square)
+
+        if st.session_state.get("sat_enabled"):
+            square_metric = create_square_20km(st.session_state["sat_x"], st.session_state["sat_y"], metric_crs=metric_crs)
+            clipped_sat, sat_summary = clip_pipes_to_square(
+                pipes_raw,
+                square_metric,
+                metric_crs=metric_crs,
+                id_col=id_col,
+                system_col=system_col,
+                material_col=material_col,
+                diameter_col=diameter_col,
+                function_col=function_col,
+            )
+
+            lon_c, lat_c = metric_point_to_wgs84(st.session_state["sat_x"], st.session_state["sat_y"], metric_crs)
+            sat_metrics = st.columns(4)
+            sat_metrics[0].metric("Escena", "20 km x 20 km")
+            sat_metrics[1].metric("Área", "400 km²")
+            sat_metrics[2].metric("Km de tubería", format_number(sat_summary.get("total_km", 0.0), 2))
+            sat_metrics[3].metric("Tramos/intersecciones", f"{sat_summary.get('tramos', 0):,}".replace(",", "."))
+            st.caption(f"Centro WGS84 aproximado: lat {lat_c:.6f}, lon {lon_c:.6f}")
+
+            by_system_sat, by_material_sat, detail_sat = summarize_clipped_pipes(clipped_sat)
+            if not detail_sat.empty:
+                st.markdown("**Resumen de tubería dentro del cuadro**")
+                detail_show = detail_sat.copy()
+                for col in ["Longitud_km", "Longitud_m"]:
+                    if col in detail_show.columns:
+                        detail_show[col] = detail_show[col].map(lambda x: format_number(x, 2))
+                st.dataframe(detail_show, use_container_width=True, hide_index=True, height=220)
+            else:
+                st.info("No se identificaron tuberías dentro del cuadro actual.")
+
+            save_cols = st.columns(3)
+            if save_cols[0].button("Guardar ubicación definida"):
+                st.session_state["sat_saved_locations"].append(
+                    {
+                        "id": f"CUADRO_{len(st.session_state['sat_saved_locations']) + 1:03d}",
+                        "centro_x": st.session_state["sat_x"],
+                        "centro_y": st.session_state["sat_y"],
+                        "latitud_wgs84": lat_c,
+                        "longitud_wgs84": lon_c,
+                        "km_tuberia": sat_summary.get("total_km", 0.0),
+                        "area_km2": 400.0,
+                    }
+                )
+                st.success("Ubicación guardada en la sesión actual.")
+
+            excel_sat = build_satellite_excel(square_metric, clipped_sat, sat_summary, st.session_state.get("sat_saved_locations", []))
+            save_cols[1].download_button(
+                "Exportar Excel contratista",
+                data=excel_sat,
+                file_name="cuadro_satelital_20x20_tuberias.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            try:
+                shp_sat = build_satellite_shp_zip(square_metric, clipped_sat)
+                save_cols[2].download_button(
+                    "Exportar SHP ZIP",
+                    data=shp_sat,
+                    file_name="cuadro_satelital_20x20_shp.zip",
+                    mime="application/zip",
+                )
+            except Exception as exc:
+                save_cols[2].warning(f"No fue posible generar SHP: {exc}")
+
+            if st.session_state.get("sat_saved_locations"):
+                st.markdown("**Ubicaciones guardadas en la sesión**")
+                st.dataframe(pd.DataFrame(st.session_state["sat_saved_locations"]), use_container_width=True, hide_index=True)
+        else:
+            st.caption("Active el cuadro para calcular los kilómetros de tubería dentro de la escena. También puede ubicarlo con las coordenadas o moviéndolo por pasos.")
+
     if st_folium is None:
         st.warning("streamlit-folium no está instalado. Instale requirements.txt para activar el mapa interactivo.")
     elif filtered.empty:
@@ -443,8 +592,17 @@ with map_tab:
             max_features_map=int(max_features_map),
             overlay_layers=overlay_layers,
         )
-        st_folium(fmap, width=None, height=700)
-        st.caption("Los segmentos conservan popup con ID, sistema, material, diámetro, longitud, órdenes asociadas, indicador y método dominante de asociación.")
+        if square_metric is not None and sat_summary is not None:
+            add_square_to_map(fmap, square_metric, sat_summary.get("total_km", 0.0))
+
+        map_result = st_folium(fmap, width=None, height=700)
+        if map_result and map_result.get("last_clicked"):
+            st.session_state["sat_last_click"] = map_result.get("last_clicked")
+        if st.session_state.get("sat_last_click"):
+            click = st.session_state["sat_last_click"]
+            st.caption(f"Último clic del mapa: lat {click.get('lat'):.6f}, lon {click.get('lng'):.6f}. Puede usarlo como centro del cuadro satelital.")
+            st.button("Usar último clic como centro del cuadro 20x20 km", on_click=use_last_click_as_square_center, args=(metric_crs,))
+        st.caption("Los segmentos conservan popup con ID, sistema, material, diámetro, longitud, órdenes asociadas, indicador y método dominante de asociación. El cuadro satelital muestra la longitud de tubería del catastro dentro de 20 km x 20 km.")
 
     with st.expander("Resumen del método de asociación", expanded=False):
         assign_summary = summarize_assignment(joined)
