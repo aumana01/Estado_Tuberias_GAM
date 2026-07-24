@@ -8,7 +8,7 @@ from typing import Iterable, Optional
 
 import pandas as pd
 
-APP_VERSION = "v1.3.2"
+APP_VERSION = "v1.3.3"
 CRS_WGS84 = "EPSG:4326"
 CRS_CRTM05 = "EPSG:5367"
 
@@ -41,6 +41,26 @@ def safe_numeric(series: pd.Series) -> pd.Series:
         .replace({"nan": None, "None": None, "<Null>": None, "": None}),
         errors="coerce",
     )
+
+
+def parse_dates(series: pd.Series) -> pd.Series:
+    """Parse dates robustly for CSV/Excel fields used by service orders.
+
+    The AyA exports commonly mix blank values, <Null>, day-first dates and
+    datetime strings. Returning pandas.NaT for invalid values keeps filtering
+    and point creation stable instead of failing during app startup.
+    """
+    if series is None:
+        return pd.Series(dtype="datetime64[ns]")
+    cleaned = (
+        series.astype(str)
+        .str.strip()
+        .replace({"": None, "nan": None, "None": None, "<Null>": None, "null": None})
+    )
+    parsed = pd.to_datetime(cleaned, errors="coerce", dayfirst=True)
+    if parsed.notna().sum() == 0:
+        parsed = pd.to_datetime(cleaned, errors="coerce", dayfirst=False)
+    return parsed
 
 
 def pick_default(columns: Iterable[str], candidates: Iterable[str]) -> Optional[str]:
