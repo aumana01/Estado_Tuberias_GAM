@@ -4,16 +4,28 @@ Aplicativo Streamlit para estimar el estado de tuberías de la GAM a partir del 
 
 ## Versión
 
-`v1.3.0`
+`v1.3.2`
 
 ## Salidas principales
 
-1. **Mapa interactivo** con segmentos clasificados, mapa de calor, puntos asociados y capas adicionales de traslape.
+1. **Mapa interactivo optimizado** con segmentos clasificados visibles, mapa de calor, puntos asociados opcionales y capas adicionales de traslape.
 2. **Tabla resumen por sistema de abastecimiento**, con longitud estimada en estado Malo, Regular y Bueno por material, más exportación a Excel.
 
-## Mejoras de rendimiento v1.3.0
+## Mejoras de rendimiento v1.3.2
 
-Esta versión incorpora caché persistente para mejorar el rendimiento después del primer cálculo. El aplicativo genera una firma técnica del análisis a partir de:
+Esta versión separa el **cálculo técnico completo** de la **visualización del mapa**:
+
+- La tabla por sistema y el Excel usan todos los segmentos calculados.
+- El mapa usa una capa visual liviana para evitar que el navegador renderice decenas de miles de geometrías o marcadores.
+- Por defecto, el mapa muestra un máximo de `2.500` segmentos visibles priorizados por gravedad e indicador.
+- Los puntos individuales se cargan apagados por defecto; el mapa de calor permanece activo.
+- Los puntos visibles, si se activan, se muestran mediante `FastMarkerCluster` con límite visual.
+- El mapa se renderiza como HTML estático para reducir la comunicación pesada entre Folium y Streamlit.
+- Las geometrías se simplifican sólo para el mapa; el cálculo no se simplifica ni se recorta.
+
+## Caché persistente
+
+El aplicativo genera una firma técnica del análisis a partir de:
 
 - catastro de tuberías cargado;
 - órdenes/intervenciones filtradas;
@@ -49,6 +61,10 @@ Para órdenes con diámetros pequeños se prueban equivalencias nominales comune
 - Bueno / verde: `≤ 3 órdenes / 100 m`
 - Regular / amarillo: valores intermedios
 - Malo / rojo: `≥ 7 órdenes / 100 m`
+- Máximo de segmentos visibles en mapa: `2.500`
+- Simplificación visual del mapa: `3 m`
+- Puntos individuales: apagados por defecto
+- Mapa de calor: activo por defecto
 
 ## Datos locales
 
