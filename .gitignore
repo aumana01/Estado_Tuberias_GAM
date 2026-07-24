@@ -1,0 +1,22 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Datos y resultados locales pesados
+data/*.csv
+data/*.json
+data/*.geojson
+data/*.zip
+outputs/
+.cache_estado_tuberias/
+*.parquet
+*.gpkg
+*.xlsx
+*.xls
+*.pdf
+
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
