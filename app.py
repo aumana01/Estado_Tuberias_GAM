@@ -130,13 +130,18 @@ def clear_satellite_square() -> None:
     st.session_state["sat_enabled"] = False
 
 
-def use_last_click_as_square_center(metric_crs: str) -> None:
-    click = st.session_state.get("sat_last_click")
-    if click:
-        x, y = wgs84_point_to_metric(click.get("lng"), click.get("lat"), metric_crs)
-        st.session_state["sat_x"] = x
-        st.session_state["sat_y"] = y
-        st.session_state["sat_enabled"] = True
+def place_square_from_click(click: dict, metric_crs: str) -> None:
+    """Place the 20x20 km square center from a map click."""
+    if not click:
+        return
+    lat = click.get("lat")
+    lng = click.get("lng")
+    if lat is None or lng is None:
+        return
+    x, y = wgs84_point_to_metric(float(lng), float(lat), metric_crs)
+    st.session_state["sat_x"] = x
+    st.session_state["sat_y"] = y
+    st.session_state["sat_enabled"] = True
 
 
 local_css()
@@ -153,8 +158,8 @@ with st.expander("Criterio del aplicativo", expanded=False):
 
         Las salidas principales son el mapa interactivo con mapa de calor, puntos y segmentos asociados; y una tabla
         por sistema de abastecimiento con la longitud estimada en estado **Malo**, **Regular** y **Bueno** por material.
-        La versión v1.2.2 agrega una herramienta de cuadro satelital de **20 km x 20 km** para estimar la longitud de
-        tubería dentro de una escena de detección de fugas satelital.
+        La versión v1.2.3 ajusta el filtro del sistema del catastro para evitar mezclar sistemas en el mapa y permite
+        colocar el cuadro satelital de **20 km x 20 km** directamente con clic sobre el mapa.
         """
     )
 
@@ -265,6 +270,30 @@ with col_b:
     point_system_col = st.selectbox("Sistema en órdenes", [None] + order_cols, index=([None] + order_cols).index(suggestions.get("system")) if suggestions.get("system") in order_cols else 0)
     location_col = st.selectbox("Sector/dirección aproximada desde órdenes", [None] + order_cols, index=([None] + order_cols).index("Localizaci") if "Localizaci" in order_cols else 0)
 
+# ----------------------------- Pipe system filter -----------------------------
+st.subheader("Filtro de catastro para análisis")
+pipes_for_analysis = pipes_raw.copy()
+selected_catalog_systems: list = []
+if system_col and system_col in pipes_for_analysis.columns:
+    catalog_systems = available_filter_values(pipes_for_analysis, system_col)
+    selected_catalog_systems = st.multiselect(
+        "Sistema(s) del catastro a analizar",
+        options=catalog_systems,
+        default=[],
+        help="Use este filtro para que el análisis, el mapa y el cuadro satelital utilicen sólo las tuberías del sistema seleccionado, por ejemplo MEA02.",
+    )
+    if selected_catalog_systems:
+        pipes_for_analysis = pipes_for_analysis[pipes_for_analysis[system_col].astype(str).isin([str(x) for x in selected_catalog_systems])].copy()
+        st.success(f"Catastro filtrado: {len(pipes_for_analysis):,} tuberías en {len(selected_catalog_systems)} sistema(s).".replace(",", "."))
+    else:
+        st.caption("Sin filtro de catastro: se analizarán todos los sistemas de la capa de tuberías.")
+else:
+    st.warning("No se seleccionó un campo de sistema en el catastro; no se puede filtrar la red por sistema.")
+
+if pipes_for_analysis.empty:
+    st.error("El filtro del catastro no dejó tuberías para analizar. Seleccione otro sistema o limpie el filtro.")
+    st.stop()
+
 # ----------------------------- Pre-analysis filters -----------------------------
 st.subheader("Filtros previos al análisis")
 filter_cols = st.columns(4)
@@ -300,7 +329,8 @@ with filter_cols[1]:
 with filter_cols[2]:
     if point_system_col and point_system_col in orders_filtered.columns:
         systems_points = available_filter_values(orders_filtered, point_system_col)
-        selected_systems_points = st.multiselect("Sistema en órdenes", options=systems_points, default=[])
+        default_order_systems = [s for s in selected_catalog_systems if s in systems_points]
+        selected_systems_points = st.multiselect("Sistema en órdenes", options=systems_points, default=default_order_systems)
         if selected_systems_points:
             orders_filtered = orders_filtered[filter_dataframe(orders_filtered, point_system_col, selected_systems_points)]
     else:
@@ -325,7 +355,7 @@ run = st.button("Ejecutar análisis", type="primary")
 if run:
     try:
         progress = st.progress(0, text="Preparando catastro de tuberías...")
-        pipes_metric = prepare_lines(pipes_raw, id_col=id_col, length_col=length_col, metric_crs=metric_crs)
+        pipes_metric = prepare_lines(pipes_for_analysis, id_col=id_col, length_col=length_col, metric_crs=metric_crs)
 
         progress.progress(20, text="Segmentando tuberías mayores a 100 m...")
         segments = segment_lines(pipes_metric, max_segment_length_m=max_segment_len)
@@ -378,6 +408,8 @@ if run:
             "umbral_amarillo_referencia": yellow_threshold,
             "umbral_rojo_malo_desde": red_threshold,
             "tuberias_originales": len(pipes_raw),
+            "tuberias_analizadas": len(pipes_for_analysis),
+            "sistemas_catastro_filtrados": ", ".join(map(str, selected_catalog_systems)) if selected_catalog_systems else "Todos",
             "segmentos_generados": len(results),
             "puntos_analizados": len(points_metric),
             "puntos_asociados": len(joined),
@@ -415,6 +447,11 @@ selected_system = st.selectbox("Sistema de abastecimiento para visualizar", syst
 filtered = results.copy()
 if selected_system != "Todos los sistemas" and system_col and system_col in filtered.columns:
     filtered = filtered[filtered[system_col].astype(str) == str(selected_system)].copy()
+
+# Use the same system scope for satellite pipe clipping.
+sat_pipes_source = pipes_for_analysis.copy()
+if selected_system != "Todos los sistemas" and system_col and system_col in sat_pipes_source.columns:
+    sat_pipes_source = sat_pipes_source[sat_pipes_source[system_col].astype(str) == str(selected_system)].copy()
 
 # Keep associated points consistent with mapped segments.
 if not joined.empty and "segmento_id" in joined.columns and "segmento_id" in filtered.columns:
@@ -468,15 +505,16 @@ with map_tab:
     with st.expander("Herramienta de cuadro satelital 20 km x 20 km", expanded=False):
         st.markdown(
             """
-            Esta herramienta utiliza **únicamente el catastro de tuberías cargado en JSON/capa de tuberías**.
-            No utiliza las órdenes de servicio. El cuadro permite estimar cuántos kilómetros de tubería quedarían
-            dentro de una escena de detección de fugas satelital de **20 km x 20 km**.
+            Esta herramienta utiliza **únicamente el catastro de tuberías dentro del sistema actualmente analizado/visualizado**.
+            No utiliza las órdenes de servicio. Para ubicar el cuadro, active la opción de colocación por clic y haga clic
+            directamente sobre el mapa. El cuadro calcula cuántos kilómetros de tubería quedarían dentro de una escena de
+            detección de fugas satelital de **20 km x 20 km**.
             """
         )
 
         if "sat_x" not in st.session_state or "sat_y" not in st.session_state:
             try:
-                default_x, default_y = default_center_from_layer(pipes_raw, metric_crs)
+                default_x, default_y = default_center_from_layer(sat_pipes_source, metric_crs)
             except Exception:
                 default_x, default_y = 0.0, 0.0
             st.session_state["sat_x"] = default_x
@@ -485,29 +523,30 @@ with map_tab:
             st.session_state["sat_enabled"] = False
         if "sat_saved_locations" not in st.session_state:
             st.session_state["sat_saved_locations"] = []
+        if "sat_click_mode" not in st.session_state:
+            st.session_state["sat_click_mode"] = True
 
-        st.checkbox("Mostrar cuadro satelital 20 km x 20 km", key="sat_enabled")
+        st.checkbox("Colocar o mover el cuadro haciendo clic sobre el mapa", key="sat_click_mode")
+        st.caption("Con esta opción activa, cada clic sobre el mapa coloca el centro del cuadro 20x20 km en esa posición.")
 
-        coord_cols = st.columns(3)
-        with coord_cols[0]:
-            st.number_input("Centro X / Este", key="sat_x", format="%.3f")
-        with coord_cols[1]:
-            st.number_input("Centro Y / Norte", key="sat_y", format="%.3f")
-        with coord_cols[2]:
-            move_step_km = st.number_input("Paso para mover (km)", min_value=0.5, max_value=20.0, value=1.0, step=0.5)
-
+        move_step_km = st.number_input("Paso para mover después de colocarlo (km)", min_value=0.5, max_value=20.0, value=1.0, step=0.5)
         move_step_m = float(move_step_km) * 1000.0
-        move_cols = st.columns(6)
+        move_cols = st.columns(5)
         move_cols[0].button("← Oeste", on_click=move_satellite_square, args=(-move_step_m, 0.0))
         move_cols[1].button("→ Este", on_click=move_satellite_square, args=(move_step_m, 0.0))
         move_cols[2].button("↑ Norte", on_click=move_satellite_square, args=(0.0, move_step_m))
         move_cols[3].button("↓ Sur", on_click=move_satellite_square, args=(0.0, -move_step_m))
         move_cols[4].button("Borrar cuadro", on_click=clear_satellite_square)
 
+        with st.expander("Ajuste manual avanzado por coordenadas", expanded=False):
+            st.number_input("Centro X / Este", key="sat_x", format="%.3f")
+            st.number_input("Centro Y / Norte", key="sat_y", format="%.3f")
+            st.checkbox("Mostrar cuadro satelital 20 km x 20 km", key="sat_enabled")
+
         if st.session_state.get("sat_enabled"):
             square_metric = create_square_20km(st.session_state["sat_x"], st.session_state["sat_y"], metric_crs=metric_crs)
             clipped_sat, sat_summary = clip_pipes_to_square(
-                pipes_raw,
+                sat_pipes_source,
                 square_metric,
                 metric_crs=metric_crs,
                 id_col=id_col,
@@ -523,7 +562,7 @@ with map_tab:
             sat_metrics[1].metric("Área", "400 km²")
             sat_metrics[2].metric("Km de tubería", format_number(sat_summary.get("total_km", 0.0), 2))
             sat_metrics[3].metric("Tramos/intersecciones", f"{sat_summary.get('tramos', 0):,}".replace(",", "."))
-            st.caption(f"Centro WGS84 aproximado: lat {lat_c:.6f}, lon {lon_c:.6f}")
+            st.caption(f"Centro WGS84 aproximado: lat {lat_c:.6f}, lon {lon_c:.6f}. Sistema mostrado: {selected_system}.")
 
             by_system_sat, by_material_sat, detail_sat = summarize_clipped_pipes(clipped_sat)
             if not detail_sat.empty:
@@ -541,6 +580,7 @@ with map_tab:
                 st.session_state["sat_saved_locations"].append(
                     {
                         "id": f"CUADRO_{len(st.session_state['sat_saved_locations']) + 1:03d}",
+                        "sistema_visualizado": selected_system,
                         "centro_x": st.session_state["sat_x"],
                         "centro_y": st.session_state["sat_y"],
                         "latitud_wgs84": lat_c,
@@ -573,7 +613,7 @@ with map_tab:
                 st.markdown("**Ubicaciones guardadas en la sesión**")
                 st.dataframe(pd.DataFrame(st.session_state["sat_saved_locations"]), use_container_width=True, hide_index=True)
         else:
-            st.caption("Active el cuadro para calcular los kilómetros de tubería dentro de la escena. También puede ubicarlo con las coordenadas o moviéndolo por pasos.")
+            st.caption("Haga clic sobre el mapa para colocar el cuadro. Luego puede ajustarlo con los botones de movimiento.")
 
     if st_folium is None:
         st.warning("streamlit-folium no está instalado. Instale requirements.txt para activar el mapa interactivo.")
@@ -597,12 +637,17 @@ with map_tab:
 
         map_result = st_folium(fmap, width=None, height=700)
         if map_result and map_result.get("last_clicked"):
-            st.session_state["sat_last_click"] = map_result.get("last_clicked")
+            click = map_result.get("last_clicked")
+            click_key = f"{float(click.get('lat', 0.0)):.7f},{float(click.get('lng', 0.0)):.7f}"
+            if st.session_state.get("sat_click_mode", True) and st.session_state.get("sat_last_click_key") != click_key:
+                st.session_state["sat_last_click_key"] = click_key
+                place_square_from_click(click, metric_crs)
+                st.rerun()
+            st.session_state["sat_last_click"] = click
         if st.session_state.get("sat_last_click"):
             click = st.session_state["sat_last_click"]
-            st.caption(f"Último clic del mapa: lat {click.get('lat'):.6f}, lon {click.get('lng'):.6f}. Puede usarlo como centro del cuadro satelital.")
-            st.button("Usar último clic como centro del cuadro 20x20 km", on_click=use_last_click_as_square_center, args=(metric_crs,))
-        st.caption("Los segmentos conservan popup con ID, sistema, material, diámetro, longitud, órdenes asociadas, indicador y método dominante de asociación. El cuadro satelital muestra la longitud de tubería del catastro dentro de 20 km x 20 km.")
+            st.caption(f"Último clic del mapa: lat {click.get('lat'):.6f}, lon {click.get('lng'):.6f}. Si la colocación por clic está activa, ese clic define el centro del cuadro satelital.")
+        st.caption("Los segmentos conservan popup con ID, sistema, material, diámetro, longitud, órdenes asociadas, indicador y método dominante de asociación. El cuadro satelital calcula la longitud de tubería del sistema visualizado dentro de 20 km x 20 km.")
 
     with st.expander("Resumen del método de asociación", expanded=False):
         assign_summary = summarize_assignment(joined)
@@ -657,6 +702,7 @@ with table_tab:
             - Las tuberías se segmentan con longitud máxima de **{params['longitud_max_segmento_m']} m**.
             - Las órdenes se asocian dentro de un radio de **{params['radio_asociacion_m']} m**.
             - La asociación prioriza **diámetro + sistema**, luego **diámetro**, y finalmente **cercanía**.
+            - El análisis del catastro se ejecutó sobre: **{params.get('sistemas_catastro_filtrados', 'Todos')}**.
             - El diámetro de la orden se compara contra el diámetro del catastro. Para registros pequeños se prueban equivalencias nominales comunes en pulgadas, por ejemplo 2≈50 mm, 3≈75 mm, 4≈100 mm, 6≈150 mm, 8≈200 mm, 10≈250 mm y 12≈300 mm.
             - Los materiales **AC / asbesto-cemento**, **latón** y **otro** se consideran por defecto **100 % en estado Malo**.
             - Cuando un segmento tiene órdenes asociadas, su estado se depura por el indicador de órdenes por cada 100 m.
