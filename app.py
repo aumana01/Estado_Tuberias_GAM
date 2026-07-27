@@ -20,6 +20,7 @@ from modules.analysis import (
     DEFAULT_MATERIAL_STATE_PERCENT,
     associate_points_to_segments,
     build_condition_tables,
+    calculate_results,
     summarize_assignment,
 )
 from modules.data_loader import (
@@ -30,12 +31,12 @@ from modules.data_loader import (
     suggest_point_columns,
     validate_line_layer,
 )
+from modules.excel_export import build_excel_report
 from modules.geoprocessing import available_filter_values, prepare_lines, to_metric, to_wgs84
 from modules.mapping import BASEMAPS, build_map
-from modules.excel_export import build_excel_report
 from modules.segmentation import segment_lines
+from modules.shp_export import build_results_shp_zip
 from modules.utils import APP_VERSION, CRS_CRTM05, CRS_WGS84, format_number, pick_default
-from modules.analysis import calculate_results
 
 DEFAULT_PIPES = ROOT / "data" / "JSON_catastro.json"
 DEFAULT_ORDERS = ROOT / "data" / "Ordenes de Servicio GAM.csv"
@@ -123,6 +124,7 @@ with st.expander("Criterio del aplicativo", expanded=False):
 
         Las salidas se reducen a dos elementos: un mapa interactivo con mapa de calor, puntos y segmentos asociados;
         y una tabla por sistema de abastecimiento con la longitud estimada en estado **Malo**, **Regular** y **Bueno** por material.
+        Adicionalmente, se puede exportar el resultado geoespacial en **SHP ZIP** con las tuberías verdes, amarillas y rojas.
         """
     )
 
@@ -470,27 +472,50 @@ with table_tab:
     st.markdown("Tabla 2. Porcentaje de estado dentro de cada material")
     st.dataframe(display_percent_table(pct_table), use_container_width=True, hide_index=True, height=220)
 
-    st.markdown("**Exportar reporte Excel**")
-    st.caption("Si se exportan varios sistemas, el archivo genera una pestaña por cada sistema de abastecimiento. El mapa interactivo se mantiene en la aplicación; no se inserta imagen en Excel para evitar capturas externas.")
-    try:
-        excel_bytes = build_excel_report(
-            results,
-            joined,
-            params,
-            system_col=system_col,
-            material_col=material_col,
-            selected_system=selected_system,
-        )
-        export_name = "reporte_estado_tuberias_todos_sistemas.xlsx" if selected_system == "Todos los sistemas" else f"reporte_estado_tuberias_{str(selected_system).replace(' ', '_')}.xlsx"
-        st.download_button(
-            "Descargar reporte Excel",
-            data=excel_bytes,
-            file_name=export_name,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-        )
-    except Exception as exc:
-        st.warning(f"No fue posible generar el Excel: {exc}")
+    st.markdown("**Exportar resultados**")
+    st.caption("El Excel resume la tabla. El SHP ZIP exporta las geometrías de tuberías verdes, amarillas y rojas con los atributos calculados. Si selecciona un sistema, ambos archivos respetan esa selección.")
+    export_col_excel, export_col_shp = st.columns(2)
+
+    with export_col_excel:
+        try:
+            excel_bytes = build_excel_report(
+                results,
+                joined,
+                params,
+                system_col=system_col,
+                material_col=material_col,
+                selected_system=selected_system,
+            )
+            export_name = "reporte_estado_tuberias_todos_sistemas.xlsx" if selected_system == "Todos los sistemas" else f"reporte_estado_tuberias_{str(selected_system).replace(' ', '_')}.xlsx"
+            st.download_button(
+                "Descargar reporte Excel",
+                data=excel_bytes,
+                file_name=export_name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+            )
+        except Exception as exc:
+            st.warning(f"No fue posible generar el Excel: {exc}")
+
+    with export_col_shp:
+        try:
+            shp_bytes = build_results_shp_zip(
+                filtered,
+                system_col=system_col,
+                material_col=material_col,
+                diameter_col=diameter_col,
+                function_col=function_col,
+            )
+            shp_name = "resultados_tuberias_todos_sistemas_shp.zip" if selected_system == "Todos los sistemas" else f"resultados_tuberias_{str(selected_system).replace(' ', '_')}_shp.zip"
+            st.download_button(
+                "Descargar resultados SHP ZIP",
+                data=shp_bytes,
+                file_name=shp_name,
+                mime="application/zip",
+                help="Incluye un SHP combinado y capas separadas por clasificación: rojas, amarillas y verdes.",
+            )
+        except Exception as exc:
+            st.warning(f"No fue posible generar el SHP: {exc}")
 
     with st.expander("Supuestos y consideraciones aplicadas", expanded=True):
         st.markdown(
