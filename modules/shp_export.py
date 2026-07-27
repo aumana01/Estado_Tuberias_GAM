@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import re
 import tempfile
 import zipfile
 from pathlib import Path
@@ -32,6 +31,12 @@ def _safe_series(gdf: gpd.GeoDataFrame, col: Optional[str], default: str) -> pd.
     if col and col in gdf.columns:
         return gdf[col].map(lambda x: _safe_text(x, default))
     return pd.Series([default] * len(gdf), index=gdf.index)
+
+
+def _numeric_series(gdf: gpd.GeoDataFrame, col: str, default: float = 0.0) -> pd.Series:
+    if col in gdf.columns:
+        return pd.to_numeric(gdf[col], errors="coerce").fillna(default)
+    return pd.Series([default] * len(gdf), index=gdf.index, dtype="float64")
 
 
 def _write_shapefile(gdf: gpd.GeoDataFrame, path: Path) -> None:
@@ -74,10 +79,10 @@ def _prepare_export_layer(
             "clasif": _safe_series(gdf, "clasificacion", "Sin datos"),
             "estado": _safe_series(gdf, "estado_estimado", "Sin datos"),
             "metodo": _safe_series(gdf, "metodo_asociacion_dominante", "Sin datos"),
-            "long_m": pd.to_numeric(gdf.get("longitud_segmento_m", 0), errors="coerce").fillna(0).round(2),
-            "cant_int": pd.to_numeric(gdf.get("cantidad_intervenciones", 0), errors="coerce").fillna(0).astype(int),
-            "ind_100m": pd.to_numeric(gdf.get("indicador_100m", 0), errors="coerce").fillna(0).round(3),
-            "gravedad": pd.to_numeric(gdf.get("orden_gravedad", 0), errors="coerce").fillna(0).astype(int),
+            "long_m": _numeric_series(gdf, "longitud_segmento_m", 0.0).round(2),
+            "cant_int": _numeric_series(gdf, "cantidad_intervenciones", 0.0).round(0).astype(int),
+            "ind_100m": _numeric_series(gdf, "indicador_100m", 0.0).round(3),
+            "gravedad": _numeric_series(gdf, "orden_gravedad", 0.0).round(0).astype(int),
         },
         geometry=gdf.geometry,
         crs=gdf.crs,
