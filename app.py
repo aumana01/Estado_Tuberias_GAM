@@ -110,6 +110,11 @@ def display_percent_table(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _export_safe_name(value: object) -> str:
+    text = str(value).strip().replace(" ", "_")
+    return "".join(ch for ch in text if ch.isalnum() or ch in "_-" )[:80] or "seleccion"
+
+
 local_css()
 st.markdown("<h1 class='aya-title'>Estado estimado de tuberías por órdenes de servicio</h1>", unsafe_allow_html=True)
 st.caption(f"Versión {APP_VERSION} · Salidas principales: mapa de calor + tabla resumen por sistema")
@@ -124,7 +129,6 @@ with st.expander("Criterio del aplicativo", expanded=False):
 
         Las salidas se reducen a dos elementos: un mapa interactivo con mapa de calor, puntos y segmentos asociados;
         y una tabla por sistema de abastecimiento con la longitud estimada en estado **Malo**, **Regular** y **Bueno** por material.
-        Adicionalmente, se puede exportar el resultado geoespacial en **SHP ZIP** con las tuberías verdes, amarillas y rojas.
         """
     )
 
@@ -294,6 +298,10 @@ run = st.button("Ejecutar análisis", type="primary")
 
 if run:
     try:
+        # Evita que un SHP preparado anteriormente quede asociado a un análisis viejo.
+        st.session_state.pop("shp_all_systems_bytes", None)
+        st.session_state.pop("shp_all_systems_ready", None)
+
         progress = st.progress(0, text="Preparando catastro de tuberías...")
         pipes_metric = prepare_lines(pipes_raw, id_col=id_col, length_col=length_col, metric_crs=metric_crs)
 
@@ -445,7 +453,7 @@ with map_tab:
             max_features_map=int(max_features_map),
             overlay_layers=overlay_layers,
         )
-        st_folium(fmap, width=None, height=700)
+        st_folium(fmap, width=None, height=700, key="main_results_map")
         st.caption("Los segmentos conservan popup con ID, sistema, material, diámetro, longitud, órdenes asociadas, indicador y método dominante de asociación.")
 
     with st.expander("Resumen del método de asociación", expanded=False):
@@ -473,7 +481,8 @@ with table_tab:
     st.dataframe(display_percent_table(pct_table), use_container_width=True, hide_index=True, height=220)
 
     st.markdown("**Exportar resultados**")
-    st.caption("El Excel resume la tabla. El SHP ZIP exporta las geometrías de tuberías verdes, amarillas y rojas con los atributos calculados. Si selecciona un sistema, ambos archivos respetan esa selección.")
+    st.caption("El Excel respeta el sistema seleccionado. El SHP ZIP se prepara siempre para **todos los sistemas en conjunto**, con capa combinada y capas separadas por verde, amarillo y rojo.")
+
     export_col_excel, export_col_shp = st.columns(2)
 
     with export_col_excel:
@@ -486,41 +495,58 @@ with table_tab:
                 material_col=material_col,
                 selected_system=selected_system,
             )
-            export_name = "reporte_estado_tuberias_todos_sistemas.xlsx" if selected_system == "Todos los sistemas" else f"reporte_estado_tuberias_{str(selected_system).replace(' ', '_')}.xlsx"
+            export_name = "reporte_estado_tuberias_todos_sistemas.xlsx" if selected_system == "Todos los sistemas" else f"reporte_estado_tuberias_{_export_safe_name(selected_system)}.xlsx"
             st.download_button(
                 "Descargar reporte Excel",
                 data=excel_bytes,
                 file_name=export_name,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary",
+                key="download_excel_results",
             )
         except Exception as exc:
             st.warning(f"No fue posible generar el Excel: {exc}")
 
     with export_col_shp:
-        try:
-            shp_bytes = build_results_shp_zip(
-                filtered,
-                system_col=system_col,
-                material_col=material_col,
-                diameter_col=diameter_col,
-                function_col=function_col,
-            )
-            shp_name = "resultados_tuberias_todos_sistemas_shp.zip" if selected_system == "Todos los sistemas" else f"resultados_tuberias_{str(selected_system).replace(' ', '_')}_shp.zip"
+        if st.button(
+            "Preparar SHP todos los sistemas",
+            help="Genera el ZIP con todos los segmentos clasificados del análisis completo. No depende del sistema seleccionado en pantalla.",
+            key="prepare_shp_all_systems",
+        ):
+            try:
+                with st.spinner("Preparando SHP para todos los sistemas..."):
+                    st.session_state["shp_all_systems_bytes"] = build_results_shp_zip(
+                        results,
+                        system_col=system_col,
+                        material_col=material_col,
+                        diameter_col=diameter_col,
+                        function_col=function_col,
+                    )
+                    st.session_state["shp_all_systems_ready"] = True
+                st.success("SHP preparado correctamente. Ahora puede descargar el ZIP.")
+            except Exception as exc:
+                st.session_state.pop("shp_all_systems_bytes", None)
+                st.session_state.pop("shp_all_systems_ready", None)
+                st.warning(f"No fue posible preparar el SHP: {exc}")
+
+        if st.session_state.get("shp_all_systems_ready") and st.session_state.get("shp_all_systems_bytes"):
             st.download_button(
                 "Descargar resultados SHP ZIP",
-                data=shp_bytes,
-                file_name=shp_name,
+                data=st.session_state["shp_all_systems_bytes"],
+                file_name="resultados_tuberias_todos_sistemas_shp.zip",
                 mime="application/zip",
                 help="Incluye un SHP combinado y capas separadas por clasificación: rojas, amarillas y verdes.",
+                key="download_shp_all_systems",
             )
-        except Exception as exc:
-            st.warning(f"No fue posible generar el SHP: {exc}")
+            st.caption("Exportación SHP preparada para todos los sistemas del análisis completo.")
+        else:
+            st.caption("Primero presione **Preparar SHP todos los sistemas**. Esto evita generar el archivo pesado en cada recarga de Streamlit.")
 
     with st.expander("Supuestos y consideraciones aplicadas", expanded=True):
         st.markdown(
             f"""
             - La tabla se calcula para: **{selected_system}**.
+            - La exportación SHP se genera para **todos los sistemas del análisis completo**, no sólo para el sistema visualizado.
             - Las tuberías se segmentan con longitud máxima de **{params['longitud_max_segmento_m']} m**.
             - Las órdenes se asocian dentro de un radio de **{params['radio_asociacion_m']} m**.
             - La asociación prioriza **diámetro + sistema**, luego **diámetro**, y finalmente **cercanía**.
