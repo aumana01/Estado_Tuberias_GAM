@@ -23,7 +23,7 @@ class ConditionTablePerformanceTests(unittest.TestCase):
                 ],
                 "material_malo_forzado": [False, False, False, True],
                 "cantidad_intervenciones": [2, 0, 0, 3],
-                "estado_estimado": ["Rojo", "Bueno", "Bueno", "Malo"],
+                "estado_estimado": ["Malo", "Bueno", "Bueno", "Malo"],
                 "longitud_segmento_m": [100.0, 50.0, 200.0, 25.0],
                 "atributo_innecesario": ["X" * 1000] * 4,
             },
