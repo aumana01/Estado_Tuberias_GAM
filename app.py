@@ -34,12 +34,14 @@ from modules.data_loader import (
 from modules.excel_export import build_excel_report
 from modules.geoprocessing import available_filter_values, prepare_lines, to_metric, to_wgs84
 from modules.mapping import BASEMAPS, build_map
+from modules.order_sources import merge_sources, source_counts
 from modules.segmentation import segment_lines
 from modules.shp_export import build_results_shp_zip
 from modules.utils import APP_VERSION, CRS_CRTM05, CRS_WGS84, format_number, pick_default
 
 DEFAULT_PIPES = ROOT / "data" / "JSON_catastro.json"
 DEFAULT_ORDERS = ROOT / "data" / "Ordenes de Servicio GAM.csv"
+DEFAULT_RANC = ROOT / "data" / "Ordenes de Servicio RANC.csv"
 
 st.set_page_config(
     page_title="Estado estimado de tuberías",
@@ -148,6 +150,13 @@ with st.sidebar:
         disabled=use_demo,
     )
 
+    ranc_upload = st.file_uploader(
+        "Histórico RANC normalizado (CSV/Excel, opcional)",
+        type=["csv", "xlsx", "xls"],
+        key="ranc_historico",
+        help="El CSV puede generarse con scripts/integrar_fugas_ranc.py a partir de los dos ZIP RANC.",
+    )
+
     st.header("2. Parámetros base")
     metric_crs_label = st.selectbox(
         "CRS métrico para análisis",
@@ -185,10 +194,54 @@ try:
             st.stop()
         pipes_raw = read_vector_file(pipe_upload, default_crs=CRS_WGS84)
         orders_df = read_table_file(order_upload)
+
+    if ranc_upload is not None:
+        ranc_df = read_table_file(ranc_upload)
+    elif DEFAULT_RANC.is_file():
+        ranc_df = load_default_table(str(DEFAULT_RANC))
+    else:
+        ranc_df = None
+    orders_df = merge_sources(orders_df, ranc_df)
     pipes_raw = validate_line_layer(pipes_raw)
 except Exception as exc:
     st.error(f"No fue posible cargar los datos: {exc}")
     st.stop()
+
+# Mantiene DATAMAR como base; el histórico RANC se usa de forma explícita.
+counts_by_source = source_counts(orders_df)
+source_options = []
+if counts_by_source.get("DATAMAR", 0):
+    source_options.append("DATAMAR (base)")
+if counts_by_source.get("RANC", 0):
+    source_options.append("RANC (histórico)")
+if all(counts_by_source.get(k, 0) for k in ("DATAMAR", "RANC")):
+    source_options.append("DATAMAR + RANC (exploratorio)")
+if not source_options:
+    st.error("No se encontraron órdenes con una fuente reconocida.")
+    st.stop()
+
+with st.sidebar:
+    st.header("5. Procedencia de órdenes")
+    source_mode = st.selectbox("Fuente para el análisis", source_options, index=0)
+    st.caption(
+        f"DATAMAR: {counts_by_source.get('DATAMAR', 0):,} · "
+        f"RANC: {counts_by_source.get('RANC', 0):,}".replace(",", ".")
+    )
+
+if source_mode == "DATAMAR (base)":
+    orders_df = orders_df[orders_df["Fuente_datos"] == "DATAMAR"].copy()
+elif source_mode == "RANC (histórico)":
+    orders_df = orders_df[orders_df["Fuente_datos"] == "RANC"].copy()
+else:
+    st.warning(
+        "Análisis exploratorio: DATAMAR y RANC pueden registrar la misma fuga. "
+        "No se han deduplicado entre fuentes; la frecuencia y el estado de tuberías "
+        "podrían sobreestimarse. Para decisiones de inversión, validar coincidencias."
+    )
+st.caption(
+    f"Fuente seleccionada: **{source_mode}**. "
+    "Los registros sin coordenadas válidas no se asociarán a segmentos."
+)
 
 st.subheader("Configuración de campos")
 col_a, col_b = st.columns(2)
@@ -356,6 +409,7 @@ if run:
             "umbral_rojo_malo_desde": red_threshold,
             "tuberias_originales": len(pipes_raw),
             "segmentos_generados": len(results),
+            "fuente_ordenes": source_mode,
             "puntos_analizados": len(points_metric),
             "puntos_asociados": len(joined),
         }
