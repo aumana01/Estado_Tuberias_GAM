@@ -182,9 +182,15 @@ def validate_line_layer(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     if gdf.empty:
         raise ValueError("La capa de tuberías no contiene geometrías.")
     valid_types = {"LineString", "MultiLineString"}
+    found_types = ", ".join(sorted(set(gdf.geometry.geom_type.dropna()))) or "desconocido"
     gdf = gdf[gdf.geometry.geom_type.isin(valid_types)]
     if gdf.empty:
-        raise ValueError("La capa de tuberías debe ser tipo línea o multilínea.")
+        types = found_types
+        raise ValueError(
+            "La capa principal de tuberías debe tener geometrías LineString o MultiLineString. "
+            f"El archivo contiene geometrías de tipo: {types}. "
+            "Para mostrar polígonos o puntos, utilice la opción de traslape visual en la pestaña Mapa."
+        )
     gdf = gdf[gdf.geometry.is_valid]
     if gdf.empty:
         raise ValueError("Todas las geometrías de tubería son inválidas.")
