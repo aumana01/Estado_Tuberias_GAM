@@ -1,6 +1,6 @@
 # Aplicativo de estado estimado de tuberías por órdenes de servicio
 
-Versión: **v1.2.4**
+Versión: **v1.2.5**
 
 Aplicación en Python + Streamlit para estimar el estado de tuberías a partir de:
 
@@ -89,6 +89,17 @@ En la pestaña **Tabla por sistema** se incluye el botón **Descargar reporte Ex
 - Cada pestaña incluye la tabla de longitud por estado/material, la tabla porcentual por material, los supuestos metodológicos y los porcentajes base utilizados.
 - El mapa se mantiene como componente interactivo dentro del aplicativo; no se inserta imagen del mapa en Excel para evitar dependencia de capturas externas.
 
+
+## Rendimiento del mapa (v1.2.5)
+
+- **Desplazamiento y zoom sin recálculo:** los movimientos del mapa no devuelven las coordenadas ni los límites al servidor, por lo que no vuelven a ejecutar el análisis de Streamlit.
+- **Canvas + marcadores rápidos:** las tuberías se dibujan con Canvas y los puntos con FastMarkerCluster, evitando miles de objetos Python/JavaScript independientes.
+- **GeoJSON reducido:** el navegador recibe solamente los atributos necesarios para el popup/tooltip (ID, sistema, material, diámetro, longitud, cantidad de órdenes, indicador y clasificación). No se recorta el GeoDataFrame utilizado para el análisis.
+- **Límite sólo visual:** inicialmente se dibujan hasta 5.000 elementos por capa (ajustable a 50.000). Cuando hay más segmentos, se seleccionan de manera reproducible, reservando representación de los estados Rojo, Amarillo y Verde. **No se pierden segmentos ni órdenes del cálculo, de las tablas ni de la exportación Excel/SHP.**
+- **Capas adicionales:** los polígonos SHP, GeoJSON, KML y otros traslapes se siguen dibujando con sus atributos; si la capa excede el límite visual sólo se muestran las primeras geometrías.
+- **Exportación Excel bajo demanda:** presione primero *Preparar Excel* y después *Descargar reporte Excel*. Se conserva en sesión hasta cambiar de análisis o de sistema, para evitar reconstruir el libro en cada recarga.
+
+El mapa de calor y los marcadores de órdenes respetan el límite de puntos visible; los conteos y el estado por segmento se calculan sobre todas las órdenes filtradas. Si necesita verificar cada geometría, seleccione un sistema de abastecimiento para reducir la carga del navegador o aumente el límite visual.
 
 ## Integración de históricos RANC (v1.2.4)
 
