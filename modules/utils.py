@@ -8,7 +8,7 @@ from typing import Iterable, Optional
 
 import pandas as pd
 
-APP_VERSION = "v1.2.4"
+APP_VERSION = "v1.2.5"
 CRS_WGS84 = "EPSG:4326"
 CRS_CRTM05 = "EPSG:5367"
 
