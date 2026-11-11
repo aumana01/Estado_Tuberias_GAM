@@ -428,7 +428,14 @@ def condition_long_form(
     """
     if results.empty:
         return pd.DataFrame(columns=["sistema", "material", "estado", "longitud_m"])
-    df = pd.DataFrame(results.drop(columns="geometry", errors="ignore")).copy()
+    # La tabla de salida no necesita copiar toda la geometría ni decenas de
+    # atributos del catastro. Conservar únicamente los insumos pertinentes.
+    required = {
+        "longitud_segmento_m", "material_resumen", "material_malo_forzado",
+        "cantidad_intervenciones", "estado_estimado",
+    }
+    required.update(col for col in (system_col, material_col) if col)
+    df = pd.DataFrame(results[[col for col in results.columns if col in required]]).copy()
     if system_col and system_col in df.columns:
         df["sistema"] = df[system_col].fillna("Sin sistema").astype(str).replace({"": "Sin sistema", "<Null>": "Sin sistema"})
     else:
@@ -441,18 +448,20 @@ def condition_long_form(
         df["material"] = "Desconocido"
 
     rows = []
-    for _, row in df.iterrows():
-        length = float(row.get("longitud_segmento_m", 0) or 0)
+    # itertuples evita construir un Series por cada segmento, sin cambiar el
+    # orden, las ponderaciones por material ni los indicadores analíticos.
+    for row in df.itertuples(index=False):
+        length = float(getattr(row, "longitud_segmento_m", 0) or 0)
         if length <= 0:
             continue
-        system = row["sistema"]
-        material = row["material"]
-        forced = bool(row.get("material_malo_forzado", False))
-        count = int(row.get("cantidad_intervenciones", 0) or 0)
+        system = row.sistema
+        material = row.material
+        forced = bool(getattr(row, "material_malo_forzado", False))
+        count = int(getattr(row, "cantidad_intervenciones", 0) or 0)
         if forced:
             rows.append({"sistema": system, "material": material, "estado": "Malo", "longitud_m": length, "origen_estimacion": "Material malo forzado"})
         elif count > 0:
-            state = str(row.get("estado_estimado", "Bueno"))
+            state = str(getattr(row, "estado_estimado", "Bueno"))
             rows.append({"sistema": system, "material": material, "estado": state, "longitud_m": length, "origen_estimacion": "Depurado por órdenes"})
         else:
             for state, pct in _material_percentages(material).items():

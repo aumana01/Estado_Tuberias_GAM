@@ -181,7 +181,7 @@ with st.sidebar:
     heat_radius = st.slider("Radio mapa de calor", min_value=5, max_value=40, value=14)
     line_weight = st.slider("Grosor de segmentos", min_value=1, max_value=10, value=4)
     line_opacity = st.slider("Transparencia de segmentos", min_value=0.1, max_value=1.0, value=0.85)
-    max_features_map = st.number_input("Máximo de elementos en mapa", min_value=500, max_value=50000, value=10000, step=500)
+    max_features_map = st.number_input("Máximo de elementos por capa visible", min_value=500, max_value=50000, value=5000, step=500, help="Limita únicamente el dibujo en el navegador, no el cálculo ni los archivos exportados.")
 
 # ----------------------------- Load data -----------------------------
 try:
@@ -351,9 +351,11 @@ run = st.button("Ejecutar análisis", type="primary")
 
 if run:
     try:
-        # Evita que un SHP preparado anteriormente quede asociado a un análisis viejo.
+        # Invalida las exportaciones de un análisis anterior.
         st.session_state.pop("shp_all_systems_bytes", None)
         st.session_state.pop("shp_all_systems_ready", None)
+        st.session_state.pop("excel_results_bytes", None)
+        st.session_state.pop("excel_results_selection", None)
 
         progress = st.progress(0, text="Preparando catastro de tuberías...")
         pipes_metric = prepare_lines(pipes_raw, id_col=id_col, length_col=length_col, metric_crs=metric_crs)
@@ -388,6 +390,7 @@ if run:
             material_col=material_col,
         )
 
+        st.session_state["analysis_revision"] = st.session_state.get("analysis_revision", 0) + 1
         st.session_state["results"] = results
         st.session_state["points"] = points_metric
         st.session_state["joined"] = joined
@@ -442,7 +445,7 @@ else:
     system_options = ["Todos los sistemas"]
 selected_system = st.selectbox("Sistema de abastecimiento para visualizar", system_options, index=0)
 
-filtered = results.copy()
+filtered = results
 if selected_system != "Todos los sistemas" and system_col and system_col in filtered.columns:
     filtered = filtered[filtered[system_col].astype(str) == str(selected_system)].copy()
 
@@ -507,8 +510,15 @@ with map_tab:
             max_features_map=int(max_features_map),
             overlay_layers=overlay_layers,
         )
-        st_folium(fmap, width=None, height=700, key="main_results_map")
-        st.caption("Los segmentos conservan popup con ID, sistema, material, diámetro, longitud, órdenes asociadas, indicador y método dominante de asociación.")
+        # Sin retorno de bounds/zoom, mover el mapa no ejecuta toda la app.
+        st_folium(fmap, width=None, height=700, key="main_results_map", returned_objects=[])
+        st.caption(
+            f"Visualización: hasta {int(max_features_map):,} elementos por capa. "
+            f"Segmentos en el análisis: {len(filtered):,}. "
+            "Si se supera el límite, se muestra una selección representativa de estados. "
+            "Las tablas y exportaciones conservan todos los segmentos."
+        )
+        st.caption("Cada segmento visible conserva ID, sistema, material, diámetro, longitud, órdenes asociadas, indicador y método dominante de asociación.")
 
     with st.expander("Resumen del método de asociación", expanded=False):
         assign_summary = summarize_assignment(joined)
@@ -540,26 +550,41 @@ with table_tab:
     export_col_excel, export_col_shp = st.columns(2)
 
     with export_col_excel:
-        try:
-            excel_bytes = build_excel_report(
-                results,
-                joined,
-                params,
-                system_col=system_col,
-                material_col=material_col,
-                selected_system=selected_system,
-            )
+        # El Excel completo se prepara sólo si el usuario lo solicita.
+        selection_key = (st.session_state.get("analysis_revision", 0), selected_system)
+        if st.button("Preparar Excel", key="prepare_excel_results", help="Genera el reporte únicamente al solicitarlo."):
+            try:
+                with st.spinner("Preparando reporte Excel..."):
+                    excel_bytes = build_excel_report(
+                        results,
+                        joined,
+                        params,
+                        system_col=system_col,
+                        material_col=material_col,
+                        selected_system=selected_system,
+                    )
+                    st.session_state["excel_results_bytes"] = excel_bytes
+                    st.session_state["excel_results_selection"] = selection_key
+            except Exception as exc:
+                st.session_state.pop("excel_results_bytes", None)
+                st.session_state.pop("excel_results_selection", None)
+                st.warning(f"No fue posible generar el Excel: {exc}")
+
+        if (
+            st.session_state.get("excel_results_selection") == selection_key
+            and st.session_state.get("excel_results_bytes")
+        ):
             export_name = "reporte_estado_tuberias_todos_sistemas.xlsx" if selected_system == "Todos los sistemas" else f"reporte_estado_tuberias_{_export_safe_name(selected_system)}.xlsx"
             st.download_button(
                 "Descargar reporte Excel",
-                data=excel_bytes,
+                data=st.session_state["excel_results_bytes"],
                 file_name=export_name,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary",
                 key="download_excel_results",
             )
-        except Exception as exc:
-            st.warning(f"No fue posible generar el Excel: {exc}")
+        else:
+            st.caption("Presione **Preparar Excel** para generar el archivo sólo cuando lo necesite.")
 
     with export_col_shp:
         if st.button(
