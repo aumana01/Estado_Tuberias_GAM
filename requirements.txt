@@ -8,3 +8,4 @@ folium>=0.15
 streamlit-folium>=0.18
 branca>=0.7
 openpyxl>=3.1
+pyshp>=2.3
