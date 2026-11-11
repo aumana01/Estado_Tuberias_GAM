@@ -65,7 +65,9 @@ class MapPerformanceTests(unittest.TestCase):
         self.assertIn("Fuga A", fmap.get_root().render())
 
     def test_centro_usa_limites_sin_necesitar_union(self):
-        self.assertEqual(_center_from_layers(self.pipes(1, 0, 0)), [9.9005, -84.1])
+        center = _center_from_layers(self.pipes(1, 0, 0))
+        self.assertAlmostEqual(center[0], 9.9005)
+        self.assertAlmostEqual(center[1], -84.1)
 
     def test_capacidad_de_mapa_no_altera_mayor_numero_de_fugas(self):
         pipes = self.pipes(40, 20, 40)
