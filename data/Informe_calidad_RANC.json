@@ -1,0 +1,37 @@
+{
+  "fuente": "RANC",
+  "descripcion": "Histórico de fugas RANC complementario a la serie DATAMAR existente",
+  "fecha_revision": "2026-11-10",
+  "registros": 35007,
+  "grupos": {
+    "Acometidas 12-19 mm": 9751,
+    "Redes >=25 mm": 25256
+  },
+  "coordenadas": {
+    "validas_marcadas_si": 34873,
+    "sin_coordenadas_marcadas_no": 134,
+    "coordenadas_fuera_del_recuadro_aproximado_GAM": 4
+  },
+  "codigo_sistema_vacio": 35007,
+  "identificadores_fuente_duplicados": 0,
+  "anio_fecha_resolucion": {
+    "2018": 452,
+    "2019": 2851,
+    "2020": 2637,
+    "2021": 3884,
+    "2022": 4353,
+    "2023": 9888,
+    "2024": 10808,
+    "2025": 134
+  },
+  "campos": 47,
+  "sha256_csv_cargado_original": "e50539b49421b81c2f0dfab6d8d91b4616acee97a0a6a137a7997aa25557ae9f",
+  "sha256_csv_repositorio_utf8_lf": "fd8fa0e80a956f1fbf1af4846c5d1fd4a26b9d08969669a6eb9e90ce0e115186",
+  "notas": [
+    "El CSV publicado conserva las filas de entrada. Únicamente se normalizan BOM y finales de línea.",
+    "Los 134 registros sin coordenadas se conservan en la base, pero no se asocian a segmentos geográficos.",
+    "El año 2025 aparece en 134 fechas de resolución pese a la denominación histórica 2018-2024.",
+    "No se dispone de Codigo_Sis fiable para RANC.",
+    "No se ha realizado deduplicación de eventos entre RANC y DATAMAR; el modo conjunto es exploratorio."
+  ]
+}
