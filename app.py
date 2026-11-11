@@ -40,6 +40,7 @@ from modules.utils import APP_VERSION, CRS_CRTM05, CRS_WGS84, format_number, pic
 
 DEFAULT_PIPES = ROOT / "data" / "JSON_catastro.json"
 DEFAULT_ORDERS = ROOT / "data" / "Ordenes de Servicio GAM.csv"
+DEFAULT_RANC = ROOT / "data" / "Ordenes de Servicio RANC.csv"
 
 st.set_page_config(
     page_title="Estado estimado de tuberías",
@@ -148,6 +149,22 @@ with st.sidebar:
         disabled=use_demo,
     )
 
+    source_mode = "DATAMAR (principal)"
+    if use_demo:
+        if DEFAULT_RANC.is_file():
+            source_mode = st.selectbox(
+                "Fuente de órdenes para análisis",
+                [
+                    "DATAMAR (principal)",
+                    "RANC (histórico de referencia)",
+                    "DATAMAR + RANC (sin deduplicación cruzada)",
+                ],
+                index=0,
+                help="RANC complementa el histórico. Las coincidencias entre fuentes no están depuradas.",
+            )
+        else:
+            st.caption("Histórico RANC opcional: agregue data/Ordenes de Servicio RANC.csv para habilitarlo.")
+
     st.header("2. Parámetros base")
     metric_crs_label = st.selectbox(
         "CRS métrico para análisis",
@@ -178,7 +195,15 @@ with st.sidebar:
 try:
     if use_demo:
         pipes_raw = load_default_vector(str(DEFAULT_PIPES))
-        orders_df = load_default_table(str(DEFAULT_ORDERS))
+        orders_df = load_default_table(str(DEFAULT_ORDERS)).copy()
+        orders_df["Fuente_datos"] = "DATAMAR"
+        if source_mode != "DATAMAR (principal)":
+            ranc_df = load_default_table(str(DEFAULT_RANC)).copy()
+            ranc_df["Fuente_datos"] = "RANC"
+            if source_mode == "RANC (histórico de referencia)":
+                orders_df = ranc_df
+            else:
+                orders_df = pd.concat([orders_df, ranc_df], ignore_index=True, sort=False)
     else:
         if pipe_upload is None or order_upload is None:
             st.info("Cargue la capa de tuberías y el archivo de órdenes, o active los archivos de ejemplo.")
@@ -189,6 +214,12 @@ try:
 except Exception as exc:
     st.error(f"No fue posible cargar los datos: {exc}")
     st.stop()
+
+if use_demo and source_mode == "DATAMAR + RANC (sin deduplicación cruzada)":
+    st.warning(
+        "La vista combinada mantiene la trazabilidad de DATAMAR y RANC, pero puede contener "
+        "fugas coincidentes. No interprete el total como órdenes únicas sin validación."
+    )
 
 st.subheader("Configuración de campos")
 col_a, col_b = st.columns(2)
@@ -241,7 +272,7 @@ with col_b:
 
 # ----------------------------- Pre-analysis filters -----------------------------
 st.subheader("Filtros previos al análisis")
-filter_cols = st.columns(4)
+filter_cols = st.columns(5)
 orders_filtered = orders_df.copy()
 
 with filter_cols[0]:
@@ -291,6 +322,12 @@ with filter_cols[3]:
     )
     if max_points and len(orders_filtered) > max_points:
         orders_filtered = orders_filtered.head(int(max_points))
+
+with filter_cols[4]:
+    if "Fuente_datos" in orders_filtered.columns:
+        fuentes = available_filter_values(orders_filtered, "Fuente_datos")
+        fuentes_seleccionadas = st.multiselect("Fuente de datos", options=fuentes, default=fuentes)
+        orders_filtered = orders_filtered[filter_dataframe(orders_filtered, "Fuente_datos", fuentes_seleccionadas)]
 
 st.info(f"Órdenes/intervenciones a analizar: {len(orders_filtered):,}".replace(",", "."))
 
