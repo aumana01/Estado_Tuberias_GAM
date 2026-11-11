@@ -59,6 +59,7 @@ class ShpZipOverlayTests(unittest.TestCase):
     def test_polygon_with_timestamp_fields_is_shown_on_map(self):
         fmap = folium.Map(location=[9.9, -84.1], zoom_start=12)
         _add_overlay_layer(fmap, self.polygon_layer(), "Propuesta RANC", 100)
+        folium.LayerControl().add_to(fmap)
         html = fmap.get_root().render()
 
         self.assertIn("Paso Ancho", html)
