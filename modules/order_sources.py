@@ -20,7 +20,7 @@ def normalize_source(df: pd.DataFrame, default_source: str) -> pd.DataFrame:
     if default_source not in {"DATAMAR", "RANC"}:
         raise ValueError("La fuente debe ser DATAMAR o RANC.")
     out = df.copy()
-    out = out.loc[:, ~out.columns.astype(str).str.match(r"^Unnamed:\\s*\\d+$")]
+    out = out.loc[:, ~out.columns.astype(str).str.match(r"^Unnamed:\s*\d+$")]
     out = out.drop(columns=["index"], errors="ignore")
     if SOURCE_FIELD not in out:
         out[SOURCE_FIELD] = default_source
