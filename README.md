@@ -96,6 +96,12 @@ La carpeta `data/` incluye:
 - `JSON_catastro.json`
 - `Ordenes de Servicio GAM.csv`
 
+### Histórico complementario de fugas RANC (opcional)
+
+El aplicativo admite además `data/Ordenes de Servicio RANC.csv` (normalizado a los mismos campos de DATAMAR). Si el archivo está presente, aparece un selector para analizar **DATAMAR**, **RANC** o **ambas fuentes**. La opción inicial se mantiene en DATAMAR; la unión de fuentes se considera **sin deduplicación cruzada** y debe validarse antes de calcular frecuencias de fuga.
+
+La metodología, las limitaciones de los registros RANC, los sistemas sin `Codigo_Sis` y la carga del archivo se explican en [Histórico de RANC](docs/HISTORICO_RANC.md).
+
 Estos archivos quedan activados por defecto mediante la opción “Usar archivos cargados de ejemplo”.
 
 ## Notas metodológicas
