@@ -94,7 +94,9 @@ def _add_overlay_layer(m: folium.Map, gdf: gpd.GeoDataFrame, name: str, max_feat
                 ).add_to(cluster)
     else:
         folium.GeoJson(
-            layer.to_json(),
+            # Los atributos de SHP pueden contener datetime/Timestamp (p. ej. CreationDa).
+            # GeoJSON necesita convertir esos valores a cadenas para que Folium los dibuje.
+            layer.to_json(default=str),
             name=name,
             style_function=_overlay_style,
             tooltip=folium.features.GeoJsonTooltip(fields=popup_fields, aliases=popup_fields, localize=True) if popup_fields else None,
