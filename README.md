@@ -1,6 +1,6 @@
 # Aplicativo de estado estimado de tuberías por órdenes de servicio
 
-Versión: **v1.2.1**
+Versión: **v1.2.4**
 
 Aplicación en Python + Streamlit para estimar el estado de tuberías a partir de:
 
@@ -88,6 +88,62 @@ En la pestaña **Tabla por sistema** se incluye el botón **Descargar reporte Ex
 - Si se selecciona un sistema específico, el Excel exporta únicamente ese sistema.
 - Cada pestaña incluye la tabla de longitud por estado/material, la tabla porcentual por material, los supuestos metodológicos y los porcentajes base utilizados.
 - El mapa se mantiene como componente interactivo dentro del aplicativo; no se inserta imagen del mapa en Excel para evitar dependencia de capturas externas.
+
+
+## Integración de históricos RANC (v1.2.4)
+
+Se incorporó una **integración por fuente** para complementar las órdenes DATAMAR con
+fugas históricas del Programa RANC. **El CSV original DATAMAR permanece intacto**.
+El histórico RANC es una referencia adicional, no una sustitución de la serie DATAMAR.
+
+### Preparación de los históricos
+
+Se utiliza el script `scripts/integrar_fugas_ranc.py` para normalizar los dos
+archivos geográficos (ZIP con SHP y atributos), correspondientes a:
+
+- `FugasGAM_Mant_Redes_12-19mm_nov2018-dic2024.zip`
+- `FugasGAM_Mant_Redes_+25mm_nov2018-dic2024.zip`
+
+Ejecutar en la raíz del repositorio, después de instalar `requirements.txt`:
+
+```bash
+python scripts/integrar_fugas_ranc.py \
+  --acometidas "FugasGAM_Mant_Redes_12-19mm_nov2018-dic2024.zip" \
+  --redes "FugasGAM_Mant_Redes_+25mm_nov2018-dic2024.zip" \
+  --salida data
+```
+
+Genera `data/Ordenes de Servicio RANC.csv` e
+`data/Informe_calidad_RANC.json`. Si se indica además
+`--datamar "data/Ordenes de Servicio GAM.csv"`, también genera
+`data/Ordenes de Servicio GAM_Ampliado.csv` como artefacto derivado, sin
+modificar la fuente DATAMAR. El CSV combinado no se utiliza automáticamente
+para evitar cargar los mismos registros dos veces.
+
+### Uso en el aplicativo
+
+En **Histórico RANC normalizado** se puede subir el CSV generado.
+Alternativamente, si `data/Ordenes de Servicio RANC.csv` existe en el
+repositorio, se detecta automáticamente. En **Procedencia de órdenes** se
+selecciona uno de los modos disponibles:
+
+1. **DATAMAR (base)**: análisis oficial de referencia; valor predeterminado.
+2. **RANC (histórico)**: análisis de registros RANC de manera independiente.
+3. **DATAMAR + RANC (exploratorio)**: visualización conjunta, con advertencia
+   de posibles solapamientos.
+
+Se conservan `Fuente_datos` e `ID_fuente` para la trazabilidad.
+Las columnas de DATAMAR se preservan, con campos extra para el histórico RANC.
+Las coordenadas RANC se toman de la geometría geográfica de origen y se
+transforman de WGS84 a CRTM05 (EPSG:5367); faltantes permanecen vacíos.
+**No se inventa `Codigo_Sis`** para RANC y no se eliminan coincidencias
+entre DATAMAR y RANC sin una conciliación verificable.
+
+**Advertencia metodológica:** una fuga puede aparecer en ambas fuentes.
+El modo combinado no debe interpretarse como número de eventos únicos ni
+usarse por sí solo para cambiar umbrales o priorizar inversiones. Conviene
+conciliar eventos por orden, fecha, ubicación y descripción, y validar
+espacialmente los resultados antes de conclusiones definitivas.
 
 ## Datos de ejemplo incluidos
 
